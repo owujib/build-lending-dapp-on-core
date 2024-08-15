@@ -5,11 +5,32 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
+
+
 contract CoreLoanPlatform is Ownable {
     using SafeERC20 for IERC20;
+    using SafeMath for uint256;
+
+uint256 public totalSupply;
 
     IERC20 public immutable USD;
     IERC20 public immutable BTC;
+
+    (bool success, ) = someAddress.call{value: msg.value}("");
+require(success, "Call failed.");
+
+// Commit-reveal scheme
+mapping(address => bytes32) public commitments;
+
+function commit(bytes32 _commitment) public {
+	commitments[msg.sender] = _commitment;
+}
+
+function reveal(uint256 _value, bytes32 _salt) public {
+	require(commitments[msg.sender] == keccak256(abi.encodePacked(_value, _salt)));
+	// Process the revealed value
+
+}
 
     uint256 public constant COLLATERAL_RATIO = 150; // 150% collateralization
     uint256 public constant BORROWABLE_RATIO = 80; // 80% of collateral can be borrowed
@@ -31,115 +52,175 @@ contract CoreLoanPlatform is Ownable {
     mapping(address => uint256) public userCollateral;
     mapping(address => uint256) public lenderBalances;
 
-    event LoanTaken(address indexed borrower, uint256 amount, uint256 collateral);
-    event LoanRepaid(address indexed borrower, uint256 amount, uint256 interest);
+    event LoanTaken(
+        address indexed borrower,
+        uint256 amount,
+        uint256 collateral
+    );
+    event LoanRepaid(
+        address indexed borrower,
+        uint256 amount,
+        uint256 interest
+    );
     event CollateralDeposited(address indexed user, uint256 amount);
     event CollateralWithdrawn(address indexed user, uint256 amount);
     event BTCDeposited(address indexed lender, uint256 amount);
     event BTCWithdrawn(address indexed lender, uint256 amount);
 
     constructor(address _USD, address _BTC) Ownable(msg.sender) {
-      require(_USD != address(0) && _BTC != address(0), "Invalid token addresses");
-      USD = IERC20(_USD);
-      BTC = IERC20(_BTC);
+        require(
+            _USD != address(0) && _BTC != address(0),
+            "Invalid token addresses"
+        );
+        USD = IERC20(_USD);
+        BTC = IERC20(_BTC);
     }
 
-    function depositCollateral(uint256 amount) external  {
-      require(amount > 0, "Amount must be greater than 0");
-      USD.safeTransferFrom(msg.sender, address(this), amount);
-      userCollateral[msg.sender] += amount;
-      emit CollateralDeposited(msg.sender, amount);
+    function depositCollateral(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        USD.safeTransferFrom(msg.sender, address(this), amount);
+        userCollateral[msg.sender] += amount;
+        emit CollateralDeposited(msg.sender, amount);
     }
 
-    function withdrawCollateral(uint256 amount) external  {
-      require(amount > 0, "Amount must be greater than 0");
-      require(userCollateral[msg.sender] >= amount, "Insufficient collateral");
-      uint256 borrowedAmount = loans[msg.sender].active ? loans[msg.sender].amount : 0;
-      uint256 requiredCollateral = (borrowedAmount * COLLATERAL_RATIO) / 100;
-      require(userCollateral[msg.sender] - amount >= requiredCollateral, "Withdrawal would undercollateralize loan");
-      userCollateral[msg.sender] -= amount;
-      USD.safeTransfer(msg.sender, amount);
-      emit CollateralWithdrawn(msg.sender, amount);
+    function withdrawCollateral(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        require(
+            userCollateral[msg.sender] >= amount,
+            "Insufficient collateral"
+        );
+        uint256 borrowedAmount = loans[msg.sender].active
+            ? loans[msg.sender].amount
+            : 0;
+        uint256 requiredCollateral = (borrowedAmount * COLLATERAL_RATIO) / 100;
+        require(
+            userCollateral[msg.sender] - amount >= requiredCollateral,
+            "Withdrawal would undercollateralize loan"
+        );
+        userCollateral[msg.sender] -= amount;
+        USD.safeTransfer(msg.sender, amount);
+        emit CollateralWithdrawn(msg.sender, amount);
     }
 
-    function borrowBTC(uint256 amount) external  {
-      require(amount > 0, "Amount must be greater than 0");
-      require(!loans[msg.sender].active, "Existing loan must be repaid first");
+    function borrowBTC(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        require(
+            !loans[msg.sender].active,
+            "Existing loan must be repaid first"
+        );
 
-      uint256 requiredCollateral = (amount * COLLATERAL_RATIO) / 100;
-      require(userCollateral[msg.sender] >= requiredCollateral, "Insufficient collateral");
-      
-      uint256 maxBorrowable = (userCollateral[msg.sender] * BORROWABLE_RATIO) / 100;
-      require(amount <= maxBorrowable, "Borrow amount exceeds limit");
+        uint256 requiredCollateral = (amount * COLLATERAL_RATIO) / 100;
+        require(
+            userCollateral[msg.sender] >= requiredCollateral,
+            "Insufficient collateral"
+        );
 
-      require(BTC.balanceOf(address(this)) >= amount, "Insufficient BTC in contract");
+        uint256 maxBorrowable = (userCollateral[msg.sender] *
+            BORROWABLE_RATIO) / 100;
+        require(amount <= maxBorrowable, "Borrow amount exceeds limit");
 
-      loans[msg.sender] = Loan(amount, requiredCollateral, block.timestamp, true);
-      BTC.safeTransfer(msg.sender, amount);
+        require(
+            BTC.balanceOf(address(this)) >= amount,
+            "Insufficient BTC in contract"
+        );
 
-      totalBorrowed = totalBorrowed + amount;
+        loans[msg.sender] = Loan(
+            amount,
+            requiredCollateral,
+            block.timestamp,
+            true
+        );
+        BTC.safeTransfer(msg.sender, amount);
 
-      emit LoanTaken(msg.sender, amount, requiredCollateral);
+        totalBorrowed = totalBorrowed + amount;
+
+        emit LoanTaken(msg.sender, amount, requiredCollateral);
     }
 
     function getBorrowableAmount(address user) external view returns (uint256) {
-      return (userCollateral[user] * BORROWABLE_RATIO) / 100;
+        return (userCollateral[user] * BORROWABLE_RATIO) / 100;
     }
 
     function getUserCollateral(address user) external view returns (uint256) {
-      return userCollateral[user];
-    }    
-
-    function depositBTC(uint256 amount) external  {
-      require(amount > 0, "Amount must be greater than 0");
-      BTC.safeTransferFrom(msg.sender, address(this), amount);
-      lenderBalances[msg.sender] += amount;
-      totalStaked = totalStaked + amount;
-      emit BTCDeposited(msg.sender, amount);
+        return userCollateral[user];
     }
 
-    function withdrawBTC(uint256 amount) external  {
-      require(amount > 0, "Amount must be greater than 0");
-      require(lenderBalances[msg.sender] >= amount, "Insufficient balance");
-      lenderBalances[msg.sender] -= amount;
-      totalStaked = totalStaked - amount;
-      BTC.safeTransfer(msg.sender, amount);
-      emit BTCWithdrawn(msg.sender, amount);
+    function depositBTC(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        BTC.safeTransferFrom(msg.sender, address(this), amount);
+        lenderBalances[msg.sender] += amount;
+        totalStaked = totalStaked + amount;
+        emit BTCDeposited(msg.sender, amount);
+    }
+
+    function withdrawBTC(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        require(lenderBalances[msg.sender] >= amount, "Insufficient balance");
+        lenderBalances[msg.sender] -= amount;
+        totalStaked = totalStaked - amount;
+        BTC.safeTransfer(msg.sender, amount);
+        emit BTCWithdrawn(msg.sender, amount);
     }
 
     function getUserStaked(address user) external view returns (uint256) {
-      return lenderBalances[user];
+        return lenderBalances[user];
     }
 
     function getCurrentApy() external pure returns (uint256) {
-      return INTEREST_RATE;
+        return INTEREST_RATE;
     }
 
-    function repayLoan(address user) external  {
-      // TODO : Implement Logic for repaying Loan
+    function repayLoan(address user) external {
+        Loan storage loan = loans[user];
+        require(loan.active, "No active loan");
+        uint256 daysElapsed = (block.timestamp - loan.timestamp) /
+            SECONDS_IN_A_DAY;
+        require(daysElapsed <= 30, "Loan duration exceeded 30 days");
+        uint256 interest = (loan.amount * INTEREST_RATE * daysElapsed) / 36500;
+        uint256 totalRepayment = loan.amount + interest;
+        BTC.safeTransferFrom(user, address(this), totalRepayment);
+        loan.active = false;
+        totalBorrowed = totalBorrowed - loan.amount;
+        emit LoanRepaid(msg.sender, loan.amount, interest);
     }
-
     function calculateInterest(address user) external view returns (uint256) {
-      // TODO : Implement Logic for calculating interest
+        Loan storage loan = loans[user];
+        if (loan.active) {
+            uint256 daysElapsed = (block.timestamp - loan.timestamp) /
+                SECONDS_IN_A_DAY;
+            uint256 interest = (loan.amount * INTEREST_RATE * daysElapsed) /
+                36500;
+            return interest;
+        }
+
+        return 0;
     }
 
-    function getLoanDetails(address borrower) external view returns (Loan memory) {
-      // TODO : Implement Logic for fetching loan of specific borrower
+    function getLoanDetails(
+        address borrower
+    ) external view returns (Loan memory) {
+        return loans[borrower];
     }
 
     function getLenderBalance(address lender) external view returns (uint256) {
-      // TODO : Implement Logic for getting the Lender balance
+        return lenderBalances[lender];
     }
 
     function getTotalStaked() external view returns (uint256) {
-      // TODO : Implement Logic for fetching total staked amount
+        return totalStaked;
     }
 
     function getTotalBorrowed() external view returns (uint256) {
-      // TODO : Implement Logic for fetching total borrowed amount
+        return totalBorrowed;
     }
 
-    function getUserBorrowed(address user) external view returns (uint256) {
-      // TODO : Implement Logic for fetching a User's borrowed amount
+    function getUserBorrowed(address user) external view return s (uint256) {
+        // TODO : Implement Logic for fetching a User's borrowed amount
     }
+
+function addSupply(uint256 _amount) public {
+	totalSupply = totalSupply.add(_amount); // Safe addition
+}
+    
+    
 }
